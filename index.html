@@ -6,10 +6,16 @@
   <title>シンプルWebプロキシ</title>
   <style>
     body { margin: 0; font-family: Arial, sans-serif; }
-    #toolbar { padding: 1rem; background: #f0f0f0; display: flex; }
+    #toolbar { padding: 1rem; background: #f0f0f0; display: flex; align-items: center; }
     #urlInput { flex: 1; padding: 0.5rem; font-size: 1rem; }
-    #goButton { padding: 0.5rem 1rem; font-size: 1rem; margin-left: 0.5rem; }
+    #goButton { padding: 0.5rem 1rem; font-size: 1rem; margin-left: 0.5rem; cursor: pointer; }
     #content { padding: 1rem; }
+    #loader { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+              border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px;
+              animation: spin 1s linear infinite; }
+    @keyframes spin { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+    img { max-width: 100%; display: block; margin: 0.5rem 0; }
+    .thumbnail { max-height: 200px; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -18,23 +24,40 @@
     <button id="goButton">Go</button>
   </div>
   <div id="content">ここにページが表示されます...</div>
+  <div id="loader"></div>
 
   <script>
-    // CORSプロキシ (必要に応じて変更)
-    // CORSプロキシ (動作が安定しているサービスに変更)
     const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+    const loader = document.getElementById('loader');
+    const CACHE_TTL = 5 * 60 * 1000; // 5分
+
+    function showLoader() { loader.style.display = 'block'; }
+    function hideLoader() { loader.style.display = 'none'; }
+
+    async function fetchWithCache(url) {
+      const key = 'proxy_cache_' + url;
+      const cached = localStorage.getItem(key);
+      if (cached) {
+        const obj = JSON.parse(cached);
+        if (Date.now() - obj.ts < CACHE_TTL) {
+          return obj.html;
+        }
+      }
+      const res = await fetch(CORS_PROXY + encodeURIComponent(url));
+      const html = await res.text();
+      localStorage.setItem(key, JSON.stringify({ ts: Date.now(), html }));
+      return html;
+    }
 
     async function loadPage(targetUrl) {
+      showLoader();
       try {
-        // 元サイトのHTMLを取得
-        const res = await fetch(CORS_PROXY + targetUrl);
-        const html = await res.text();
-
-        // DOM生成
+        const html = await fetchWithCache(targetUrl);
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
 
-        // <base> を設定してリソース URL は元ドメインのまま利用
+        document.title = doc.title || targetUrl;
+
         let base = doc.querySelector('base');
         if (!base) {
           base = doc.createElement('base');
@@ -42,20 +65,38 @@
         }
         base.setAttribute('href', targetUrl);
 
-        // ナビゲーション用リンクだけ書き換え
-        doc.querySelectorAll('a').forEach(a => {
-          const href = a.getAttribute('href');
-          if (!href) return;
-          let absolute;
-          if (href.startsWith('http') || href.startsWith('//')) {
-            absolute = href.startsWith('//') ? location.protocol + href : href;
-          } else {
-            absolute = new URL(href, targetUrl).href;
-          }
-          a.setAttribute('href', `/?url=${encodeURIComponent(absolute)}`);
+        doc.querySelectorAll('script').forEach(s => s.remove());
+
+        // 画像をサムネイル化＋LazyLoad
+        doc.querySelectorAll('img').forEach(img => {
+          img.loading = 'lazy';
+          img.classList.add('thumbnail');
+          img.addEventListener('click', () => {
+            img.classList.toggle('thumbnail');
+          });
         });
 
-        // content 部分に表示
+        // 動画にコントロールを追加
+        doc.querySelectorAll('video').forEach(v => {
+          v.setAttribute('controls', '');
+        });
+
+        // フォームはGETでproxy経由
+        doc.querySelectorAll('form').forEach(f => {
+          const action = f.getAttribute('action') || targetUrl;
+          const abs = action.startsWith('http') || action.startsWith('//')
+                      ? (action.startsWith('//') ? location.protocol + action : action)
+                      : new URL(action, targetUrl).href;
+          f.setAttribute('action', '/');
+          f.setAttribute('method', 'GET');
+          const inp = document.createElement('input');
+          inp.type = 'hidden'; inp.name = 'url'; inp.value = abs;
+          f.appendChild(inp);
+        });
+
+        // 元リンクはそのまま表示（ナビゲーションのみ対応）
+        // ドメイン変換せず、そのままクリックで遷移可能
+
         const wrapper = document.createElement('div');
         wrapper.append(...doc.body.childNodes);
         const container = document.getElementById('content');
@@ -63,10 +104,12 @@
         container.appendChild(wrapper);
       } catch (err) {
         document.getElementById('content').textContent = '読み込みエラー: ' + err;
+        document.title = 'エラー';
+      } finally {
+        hideLoader();
       }
     }
 
-    // イベント設定
     document.getElementById('goButton').addEventListener('click', () => {
       const url = document.getElementById('urlInput').value;
       if (url) {
@@ -74,11 +117,8 @@
         loadPage(url);
       }
     });
-    document.getElementById('urlInput').addEventListener('keyup', e => {
-      if (e.key === 'Enter') document.getElementById('goButton').click();
-    });
+    document.getElementById('urlInput').addEventListener('keyup', e => { if (e.key === 'Enter') document.getElementById('goButton').click(); });
 
-    // クエリから自動読み込み
     const params = new URLSearchParams(location.search);
     if (params.has('url')) {
       const u = params.get('url');
