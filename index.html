@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>シンプルWebプロキシ</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; }
+    #toolbar { padding: 1rem; background: #f0f0f0; display: flex; }
+    #urlInput { flex: 1; padding: 0.5rem; font-size: 1rem; }
+    #goButton { padding: 0.5rem 1rem; font-size: 1rem; margin-left: 0.5rem; }
+    #content { padding: 1rem; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <input id="urlInput" type="url" placeholder="https://example.com" required>
+    <button id="goButton">Go</button>
+  </div>
+  <div id="content">ここにページが表示されます...</div>
+
+  <script>
+    // CORSプロキシ (必要に応じて変更)
+    const CORS_PROXY = 'https://cors-anywhere.herokuapp.com/';
+
+    async function loadPage(targetUrl) {
+      try {
+        // 元サイトのHTMLを取得
+        const res = await fetch(CORS_PROXY + targetUrl);
+        const html = await res.text();
+
+        // DOM生成
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        // <base> を設定してリソース URL は元ドメインのまま利用
+        let base = doc.querySelector('base');
+        if (!base) {
+          base = doc.createElement('base');
+          doc.head.insertBefore(base, doc.head.firstChild);
+        }
+        base.setAttribute('href', targetUrl);
+
+        // ナビゲーション用リンクだけ書き換え
+        doc.querySelectorAll('a').forEach(a => {
+          const href = a.getAttribute('href');
+          if (!href) return;
+          let absolute;
+          if (href.startsWith('http') || href.startsWith('//')) {
+            absolute = href.startsWith('//') ? location.protocol + href : href;
+          } else {
+            absolute = new URL(href, targetUrl).href;
+          }
+          a.setAttribute('href', `/?url=${encodeURIComponent(absolute)}`);
+        });
+
+        // content 部分に表示
+        const wrapper = document.createElement('div');
+        wrapper.append(...doc.body.childNodes);
+        const container = document.getElementById('content');
+        container.innerHTML = '';
+        container.appendChild(wrapper);
+      } catch (err) {
+        document.getElementById('content').textContent = '読み込みエラー: ' + err;
+      }
+    }
+
+    // イベント設定
+    document.getElementById('goButton').addEventListener('click', () => {
+      const url = document.getElementById('urlInput').value;
+      if (url) {
+        history.replaceState(null, '', `/?url=${encodeURIComponent(url)}`);
+        loadPage(url);
+      }
+    });
+    document.getElementById('urlInput').addEventListener('keyup', e => {
+      if (e.key === 'Enter') document.getElementById('goButton').click();
+    });
+
+    // クエリから自動読み込み
+    const params = new URLSearchParams(location.search);
+    if (params.has('url')) {
+      const u = params.get('url');
+      document.getElementById('urlInput').value = u;
+      loadPage(u);
+    }
+  </script>
+</body>
+</html>
